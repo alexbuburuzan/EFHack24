@@ -37,9 +37,8 @@ st.set_page_config(
 )
 st.title("☀️ Open Source Quartz Solar Forecast")
 
-# Initialize session state for time variables
 if 'current_time' not in st.session_state:
-    st.session_state.current_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+    st.session_state.current_time = datetime(2024, 7, 3, 11, 45, tzinfo=timezone.utc)
 
 if 'prediction_time' not in st.session_state:
     st.session_state.prediction_time = st.session_state.current_time.replace(
@@ -52,7 +51,7 @@ selected_date = st.sidebar.date_input("Select a date", value=st.session_state.cu
 selected_time = st.sidebar.time_input("Select a time", value=st.session_state.current_time.time())
 
 # Update CURRENT_TIME based on user input
-new_current_time = datetime.combine(selected_date, selected_time, tzinfo=timezone.utc)
+new_current_time = datetime.combine(selected_date, selected_time).replace(tzinfo=timezone.utc)
 if new_current_time != st.session_state.current_time:
     st.session_state.current_time = new_current_time
     # Update PREDICTION_TIME to the morning of the selected CURRENT_TIME
@@ -86,12 +85,21 @@ def make_api_request(endpoint, method="GET", data=None):
         st.error(f"API request error: {e}")
         return None
 
+def valuegenerated(delta,price=0.1,buffer=0.05,fine=2.0,ev=0.2):
+    if delta < -buffer:
+        value = -(1+ev)*price*buffer+buffer*price+fine*price*(-delta-buffer)
+    elif -buffer<delta<=0:
+        value = -(buffer+delta)*(1+ev)*price + buffer*price
+    else:
+        value = price*buffer
+    return value
+
 # Main app logic
 st.sidebar.header("PV Site Configuration")
 
 latitude = st.sidebar.number_input("Latitude", min_value=-90.0, max_value=90.0, value=51.75, step=0.01)
 longitude = st.sidebar.number_input("Longitude", min_value=-180.0, max_value=180.0, value=-1.25, step=0.01)
-capacity_kwp = st.sidebar.number_input("Capacity (kWp)", min_value=0.1, value=1.25, step=0.01)
+capacity_kwp = st.sidebar.number_input("Capacity (kWp)", min_value=0.1, value=5000., step=0.01)
 
 # Manage Solar Panel Database
 st.sidebar.subheader("Solar Panel Database")
@@ -156,27 +164,50 @@ if st.sidebar.button("Run Forecast"):
             daily_forecast = pd.DataFrame(daily_forecast['predictions'])
             daily_forecast = daily_forecast.iloc[:len(daily_forecast)//2]
             current_forecast = pd.DataFrame(current_forecast['predictions'])
-            current_forecast = current_forecast.iloc[:2]
+            current_forecast = current_forecast.iloc[:3]
 
-            # Plotting
-            fig = px.line(
-                daily_forecast.reset_index(),
-                x="index",
-                y="power_kw",
-                title="Forecasted Power Generation",
-                labels={"power_kw": "Power (kW)", "index": "Time"}
+            daily_predicted = daily_forecast.loc[current_forecast.index].power_kw.values
+            current_predicted = current_forecast.power_kw.values
+
+            area_daily = ((daily_predicted[0] + daily_predicted[1]) * 0.5 + (daily_predicted[1] + daily_predicted[2]) * 0.5) / 4
+            area_current = ((current_predicted[0] + current_predicted[1]) * 0.5 + (current_predicted[1] + current_predicted[2]) * 0.5) / 4
+            delta = area_current - area_daily
+            st.write(f"Difference in power generation between current and forecasted: {delta:.2f} kWh")
+
+            value = valuegenerated(delta)
+            st.write(f"Value generated: £{value:.2f}")
+
+            fig = go.Figure()
+
+            # Add the first line
+            fig.add_trace(
+                go.Scatter(
+                    x=daily_forecast.index,  # Ensure "index" exists
+                    y=daily_forecast["power_kw"],  # Ensure "power_kw" exists
+                    mode='lines',
+                    name='Day forecast'
+                )
             )
-            # Add overlay for current_forecast
+
+            # Add the second line
             fig.add_trace(
                 go.Scatter(
                     x=current_forecast.index,  # Ensure "index" exists
                     y=current_forecast["power_kw"],  # Ensure "power_kw" exists
                     mode='markers+lines',
-                    name='Current Forecast',
+                    name='30min prediction',
                     line=dict(color='red'),  # Customize color if needed
                     marker=dict(size=8)
                 )
             )
+
+            # Customize the layout
+            fig.update_layout(
+                title="Energy gap between forecast and current prediction",
+                xaxis_title="Time",
+                yaxis_title="Power (kW)"
+            )
+
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.error("No forecast data available. Please check your inputs and try again.")
