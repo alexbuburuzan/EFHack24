@@ -37,12 +37,12 @@ def forecast(forecast_request: ForecastRequest):
     formatted_timestamp = timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
     site_no_live = PVSite(latitude=site.latitude, longitude=site.longitude, capacity_kwp=site.capacity_kwp)
-    predictions_no_live = run_forecast(site=site_no_live, ts=timestamp)
+    predictions_no_live = run_forecast(site=site_no_live, ts=timestamp, nwp_source='gfs')
 
     if not site.inverter_type:
         predictions = predictions_no_live
     else:
-        predictions_with_live = run_forecast(site=site, ts=timestamp)
+        predictions_with_live = run_forecast(site=site, ts=timestamp, nwp_source='gfs')
         predictions_with_live['power_kw_no_live_pv'] = predictions_no_live['power_kw']
         predictions = predictions_with_live
 

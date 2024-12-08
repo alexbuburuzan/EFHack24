@@ -3,14 +3,12 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime, timezone
 import os
+import plotly.graph_objects as go
 import requests
 from PIL import Image
 from dotenv import load_dotenv
 
 from quartz_solar_forecast.pydantic_models import PVSite
-
-PREDICTION_TIME = datetime(2024, 12, 5, 0, 0, 0, tzinfo=timezone.utc).isoformat()
-CURRENT_TIME = datetime(2024, 12, 5, 11, 0, 0, tzinfo=timezone.utc).isoformat()
 
 # Load environment variables
 load_dotenv()
@@ -33,11 +31,41 @@ logo_path = os.path.join(script_dir, "logo.png")
 im = Image.open(logo_path)
 
 st.set_page_config(
-    page_title="Open Source Quartz Solar Forecast | Open Climate Fix",
+    page_title="EFHack24 submission powered by Open Climate Fix",
     layout="wide",
     page_icon=im,
 )
 st.title("☀️ Open Source Quartz Solar Forecast")
+
+# Initialize session state for time variables
+if 'current_time' not in st.session_state:
+    st.session_state.current_time = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+if 'prediction_time' not in st.session_state:
+    st.session_state.prediction_time = st.session_state.current_time.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+# Sidebar inputs for selecting CURRENT_TIME
+st.sidebar.subheader("Select Current Time")
+selected_date = st.sidebar.date_input("Select a date", value=st.session_state.current_time.date())
+selected_time = st.sidebar.time_input("Select a time", value=st.session_state.current_time.time())
+
+# Update CURRENT_TIME based on user input
+new_current_time = datetime.combine(selected_date, selected_time, tzinfo=timezone.utc)
+if new_current_time != st.session_state.current_time:
+    st.session_state.current_time = new_current_time
+    # Update PREDICTION_TIME to the morning of the selected CURRENT_TIME
+    st.session_state.prediction_time = new_current_time.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+# Display current and prediction times
+CURRENT_TIME = st.session_state.current_time.isoformat()
+PREDICTION_TIME = st.session_state.prediction_time.isoformat()
+
+st.sidebar.write(f"**Current Time:** {CURRENT_TIME}")
+st.sidebar.write(f"**Prediction Time:** {PREDICTION_TIME}")
 
 # In-memory database for solar panels
 if 'solar_panels' not in st.session_state:
@@ -122,22 +150,34 @@ if st.sidebar.button("Run Forecast"):
             st.success("Forecast completed successfully!")
 
             # Display current timestamp
-            st.subheader(f"Forecast generated at: {daily_forecast['timestamp']}")
+            st.subheader(f"Rolling forecast generated at: {current_forecast['timestamp']}")
 
             # Process and display predictions
-            predictions = pd.DataFrame(daily_forecast['predictions'])
-            predictions = predictions.iloc[:len(predictions)//2]
+            daily_forecast = pd.DataFrame(daily_forecast['predictions'])
+            daily_forecast = daily_forecast.iloc[:len(daily_forecast)//2]
+            current_forecast = pd.DataFrame(current_forecast['predictions'])
+            current_forecast = current_forecast.iloc[:2]
 
             # Plotting
-            if 'power_kw' in predictions.columns:
-                fig = px.line(
-                    predictions.reset_index(),
-                    x="index",
-                    y="power_kw",
-                    title="Forecasted Power Generation",
-                    labels={"power_kw": "Power (kW)", "index": "Time"}
+            fig = px.line(
+                daily_forecast.reset_index(),
+                x="index",
+                y="power_kw",
+                title="Forecasted Power Generation",
+                labels={"power_kw": "Power (kW)", "index": "Time"}
+            )
+            # Add overlay for current_forecast
+            fig.add_trace(
+                go.Scatter(
+                    x=current_forecast.index,  # Ensure "index" exists
+                    y=current_forecast["power_kw"],  # Ensure "power_kw" exists
+                    mode='markers+lines',
+                    name='Current Forecast',
+                    line=dict(color='red'),  # Customize color if needed
+                    marker=dict(size=8)
                 )
-                st.plotly_chart(fig, use_container_width=True)
+            )
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.error("No forecast data available. Please check your inputs and try again.")
     else:
