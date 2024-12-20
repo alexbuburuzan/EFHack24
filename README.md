@@ -1,4 +1,4 @@
-# Enhancing Solar Farm Stability through Dynamic Vehicle-to-Grid Integration and Nowcasting
+# Solar Farm Stability through Vehicle-to-Grid Integration and Nowcasting
 
 This project demonstrates a "proof-of-concept" dashboard that forecasts solar power production in real-time and integrates Electric Vehicle (EV) batteries' novel vehicle-to-grid (V2G) capabilities. The goal is to leverage EV batteries to stabilize the output of a solar farm by covering unexpected dips in solar generation, thereby enhancing the reliability and stability of renewable energy on the grid.
 
