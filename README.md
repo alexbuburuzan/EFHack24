@@ -19,7 +19,6 @@ In proof-of-concept tests, we observed the EV integration could smooth the solar
 ---
 
 ## Getting Started
-We did not 
 
 ### Installation
 
