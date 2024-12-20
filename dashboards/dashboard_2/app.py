@@ -7,6 +7,9 @@ import plotly.graph_objects as go
 import requests
 from PIL import Image
 from dotenv import load_dotenv
+from utils import *
+import pydeck as pdk
+import time
 
 from quartz_solar_forecast.pydantic_models import PVSite
 
@@ -19,6 +22,18 @@ if 'enphase_system_id' not in st.session_state:
     st.session_state.enphase_system_id = None
 if 'redirect_url' not in st.session_state:
     st.session_state.redirect_url = ""
+if 'current_time' not in st.session_state:
+    st.session_state.current_time = datetime(2024, 7, 3, 11, 45, tzinfo=timezone.utc)
+if 'prediction_time' not in st.session_state:
+    st.session_state.prediction_time = st.session_state.current_time.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+if 'cars_df' not in st.session_state:
+    st.session_state.cars_df = generate_car_dataset()
+if 'solar_panels' not in st.session_state:
+    st.session_state.solar_panels = pd.DataFrame(
+        columns=['Name', 'Latitude', 'Longitude', 'Capacity (kWp)']
+    )
 
 # Set up the base URL for the FastAPI server
 FASTAPI_BASE_URL = "http://localhost:8000"
@@ -26,29 +41,18 @@ FASTAPI_BASE_URL = "http://localhost:8000"
 # Get the directory of the current script
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Construct the path to logo.png
-logo_path = os.path.join(script_dir, "logo.png")
-im = Image.open(logo_path)
-
 st.set_page_config(
-    page_title="EFHack24 submission powered by Open Climate Fix",
+    page_title="EFHack24 submission",
     layout="wide",
-    page_icon=im,
 )
-st.title("☀️ Open Source Quartz Solar Forecast")
-
-if 'current_time' not in st.session_state:
-    st.session_state.current_time = datetime(2024, 7, 3, 11, 45, tzinfo=timezone.utc)
-
-if 'prediction_time' not in st.session_state:
-    st.session_state.prediction_time = st.session_state.current_time.replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+st.title("Stabl")
 
 # Sidebar inputs for selecting CURRENT_TIME
 st.sidebar.subheader("Select Current Time")
 selected_date = st.sidebar.date_input("Select a date", value=st.session_state.current_time.date())
 selected_time = st.sidebar.time_input("Select a time", value=st.session_state.current_time.time())
+selected_date = value=st.session_state.current_time.date()
+selected_time = value=st.session_state.current_time.time()
 
 # Update CURRENT_TIME based on user input
 new_current_time = datetime.combine(selected_date, selected_time).replace(tzinfo=timezone.utc)
@@ -63,46 +67,15 @@ if new_current_time != st.session_state.current_time:
 CURRENT_TIME = st.session_state.current_time.isoformat()
 PREDICTION_TIME = st.session_state.prediction_time.isoformat()
 
-st.sidebar.write(f"**Current Time:** {CURRENT_TIME}")
-st.sidebar.write(f"**Prediction Time:** {PREDICTION_TIME}")
-
-# In-memory database for solar panels
-if 'solar_panels' not in st.session_state:
-    st.session_state.solar_panels = pd.DataFrame(
-        columns=['Name', 'Latitude', 'Longitude', 'Capacity (kWp)']
-    )
-
-def make_api_request(endpoint, method="GET", data=None):
-    try:
-        url = f"{FASTAPI_BASE_URL}{endpoint}"
-        if method == "GET":
-            response = requests.get(url)
-        elif method == "POST":
-            response = requests.post(url, json=data)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"API request error: {e}")
-        return None
-
-def valuegenerated(delta,price=0.1,buffer=0.05,fine=2.0,ev=0.2):
-    if delta < -buffer:
-        value = -(1+ev)*price*buffer+buffer*price+fine*price*(-delta-buffer)
-    elif -buffer<delta<=0:
-        value = -(buffer+delta)*(1+ev)*price + buffer*price
-    else:
-        value = price*buffer
-    return value
-
 # Main app logic
 st.sidebar.header("PV Site Configuration")
 
-latitude = st.sidebar.number_input("Latitude", min_value=-90.0, max_value=90.0, value=51.75, step=0.01)
+latitude = st.sidebar.number_input("Latitude", min_value=-90.0, max_value=90.0, value=51.82, step=0.01)
 longitude = st.sidebar.number_input("Longitude", min_value=-180.0, max_value=180.0, value=-1.25, step=0.01)
 capacity_kwp = st.sidebar.number_input("Capacity (kWp)", min_value=0.1, value=5000., step=0.01)
 
 # Manage Solar Panel Database
-st.sidebar.subheader("Solar Panel Database")
+st.sidebar.subheader("Solar Farm Database")
 if st.sidebar.button("Add to Database"):
     new_panel = {
         'Name': f"Site {len(st.session_state.solar_panels) + 1}",
@@ -114,7 +87,7 @@ if st.sidebar.button("Add to Database"):
     st.success(f"Added {new_panel['Name']} to the database!")
 
 # Display Solar Panel Database
-st.sidebar.subheader("Current Solar Panels")
+st.sidebar.subheader("Solar Farms")
 st.sidebar.dataframe(st.session_state.solar_panels)
 
 # Dropdown for site selection
@@ -127,13 +100,54 @@ else:
     selected_site = None
     st.sidebar.info("No sites available for selection. Add a site first.")
 
-# Map Display
-st.subheader("Map of Solar Panel Sites")
-if not st.session_state.solar_panels.empty:
-    map_data = st.session_state.solar_panels.rename(columns={"Latitude": "latitude", "Longitude": "longitude"})
-    st.map(map_data[['latitude', 'longitude']])
-else:
-    st.info("No solar panel sites added yet. Add a site to see it on the map.")
+# EV Vehicle Selection and Visualization
+if not st.session_state.cars_df.empty:
+    # Discrete color selection based on battery percentage
+    def get_car_color(percentage):
+        if percentage <= 33:
+            # Red
+            return [255, 0, 0, 150]
+        elif percentage <= 66:
+            # Yellow
+            return [255, 255, 0, 150]
+        else:
+            # Green
+            return [0, 255, 0, 150]
+
+    st.session_state.cars_df["color"] = st.session_state.cars_df["Battery_Percentage"].apply(get_car_color)
+
+    solar_farm_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=st.session_state.solar_panels,
+        get_position=["Longitude", "Latitude"],
+        get_radius=300,
+        get_fill_color=[0, 0, 255, 255],
+        pickable=True,
+        radius_min_pixels=5,
+        radius_max_pixels=30,
+        tooltip={"text": "Name: {Name}\nCapacity: {Capacity (kWp)} kWp"}
+    )
+
+    car_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=st.session_state.cars_df,
+        get_position=["Longitude", "Latitude"],
+        get_radius=30,
+        get_fill_color="color",
+        pickable=True,
+        radius_min_pixels=2,
+        radius_max_pixels=10,
+        tooltip={"text": "Name: {Car_ID}\nContribution: {Energy_Contribution_kWh} kWh"}
+    )
+
+    # compute center of all points
+    center = st.session_state.cars_df[["Latitude", "Longitude"]].mean().values
+    view_state = pdk.ViewState(latitude=center[0], longitude=center[1], zoom=10)
+    r = pdk.Deck(
+        layers=[solar_farm_layer, car_layer],
+        initial_view_state=view_state,
+    )
+    st.pydeck_chart(r)
 
 # Forecast Logic
 if st.sidebar.button("Run Forecast"):
@@ -158,7 +172,7 @@ if st.sidebar.button("Run Forecast"):
             st.success("Forecast completed successfully!")
 
             # Display current timestamp
-            st.subheader(f"Rolling forecast generated at: {current_forecast['timestamp']}")
+            st.subheader(f"Rolling forecast generated")
 
             # Process and display predictions
             daily_forecast = pd.DataFrame(daily_forecast['predictions'])
@@ -172,31 +186,44 @@ if st.sidebar.button("Run Forecast"):
             area_daily = ((daily_predicted[0] + daily_predicted[1]) * 0.5 + (daily_predicted[1] + daily_predicted[2]) * 0.5) / 4
             area_current = ((current_predicted[0] + current_predicted[1]) * 0.5 + (current_predicted[1] + current_predicted[2]) * 0.5) / 4
             delta = area_current - area_daily
-            st.write(f"Difference in power generation between current and forecasted: {delta:.2f} kWh")
+            st.markdown(f"**Difference in power generation between current and forecasted: :** <span style='color:red'>{delta:.2f}kWh</span>", unsafe_allow_html=True)
 
             value = valuegenerated(delta)
-            st.write(f"Value generated: £{value:.2f}")
 
             fig = go.Figure()
+            # Find the common index range between daily_forecast and current_forecast
+            common_index = daily_forecast.index.intersection(current_forecast.index)
 
-            # Add the first line
+            # First, plot the full daily forecast line if desired
             fig.add_trace(
                 go.Scatter(
-                    x=daily_forecast.index,  # Ensure "index" exists
-                    y=daily_forecast["power_kw"],  # Ensure "power_kw" exists
+                    x=daily_forecast.index,
+                    y=daily_forecast["power_kw"],
                     mode='lines',
-                    name='Day forecast'
+                    name='Day forecast (full)'
                 )
             )
 
-            # Add the second line
+            # Now plot the restricted daily forecast line over the common range without adding it to the legend
             fig.add_trace(
                 go.Scatter(
-                    x=current_forecast.index,  # Ensure "index" exists
-                    y=current_forecast["power_kw"],  # Ensure "power_kw" exists
-                    mode='markers+lines',
+                    x=common_index,
+                    y=daily_forecast.loc[common_index, "power_kw"],
+                    mode='lines',
+                    showlegend=False
+                )
+            )
+
+            # Plot the current forecast line only over the common range, with fill to show the difference
+            fig.add_trace(
+                go.Scatter(
+                    x=common_index,
+                    y=current_forecast.loc[common_index, "power_kw"],
+                    mode='lines',
                     name='30min prediction',
-                    line=dict(color='red'),  # Customize color if needed
+                    line=dict(color='red'),
+                    fill='tonexty',
+                    fillcolor='rgba(255,0,0,0.2)',
                     marker=dict(size=8)
                 )
             )
@@ -209,6 +236,41 @@ if st.sidebar.button("Run Forecast"):
             )
 
             st.plotly_chart(fig, use_container_width=True)
+
+            result, _ = vehicle_selection(delta, st.session_state.cars_df)
+
+            st.markdown(f"**Value generated:** <span style='color:green'>£{value:.2f}</span>", unsafe_allow_html=True)
+
+            st.subheader("Selected Car Discharge Contributions")
+
+            if isinstance(result, pd.DataFrame) and "Energy_Contribution_kWh" in result.columns:
+                # Sort by contribution in descending order
+                result_sorted = result.sort_values(by="Energy_Contribution_kWh", ascending=False)
+
+                # Interpolation parameters
+                num_updates = 20
+                update_interval = 2  # in seconds
+                battery_placeholder = st.empty()
+
+                # Extract initial and final battery percentages
+                initial_percentages = result_sorted["Battery_Percentage"].values
+                # Assuming "Final_Battery_Percentage" is present in result
+                final_percentages = result_sorted["Final_Battery_Percentage"].values
+
+                # Live update loop
+                for i in range(num_updates + 1):
+                    t = i / num_updates
+                    current_percentages = initial_percentages + t * (final_percentages - initial_percentages)
+                    temp_df = result_sorted.copy()
+                    temp_df["Current_Battery_Percentage"] = current_percentages
+
+                    battery_placeholder.dataframe(
+                        temp_df[["Car_ID", "Current_Battery_Percentage", "Final_Battery_Percentage", "Energy_Contribution_kWh"]]
+                    )
+                    time.sleep(update_interval)
+
+            else:
+                st.write("No cars selected or data not available.")
         else:
             st.error("No forecast data available. Please check your inputs and try again.")
     else:
